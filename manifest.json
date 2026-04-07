@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "YouTube Ad Skipper",
-  "version": "1.0",
-  "description": "Auto-skips and fast-forwards YouTube ads",
+  "version": "1.1",
+  "description": "Auto-skips YouTube ads and shows real dislike counts",
   "permissions": ["storage"],
+  "host_permissions": ["https://returnyoutubedislike.com/*"],
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*"],
-      "js": ["content.js"],
+      "js": ["content.js", "dislike.js"],
       "run_at": "document_idle"
     }
   ],
