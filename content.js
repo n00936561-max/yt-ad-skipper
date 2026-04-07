@@ -2,6 +2,15 @@
   const FAST_FORWARD_RATE = 16;
   let adActive = false;
   let originalRate = 1;
+  let enabled = true; // cached — never read chrome.storage inside tick()
+
+  // Load initial state once, then keep in sync via listener
+  try {
+    chrome.storage.local.get({ enabled: true }, (res) => { enabled = res.enabled; });
+    chrome.storage.onChanged.addListener((changes) => {
+      if ('enabled' in changes) enabled = changes.enabled.newValue;
+    });
+  } catch { /* extension context already gone on inject — default enabled */ }
 
   const SKIP_SELECTORS = [
     '.ytp-skip-ad-button',
@@ -24,26 +33,14 @@
   function tryClickSkip() {
     for (const sel of SKIP_SELECTORS) {
       const btn = document.querySelector(sel);
-      if (btn) {
-        btn.click();
-        return true;
-      }
+      if (btn) { btn.click(); return true; }
     }
     return false;
-  }
-
-  function isContextValid() {
-    try {
-      return !!chrome.runtime?.id;
-    } catch {
-      return false;
-    }
   }
 
   function teardown() {
     clearInterval(intervalId);
     observer.disconnect();
-    // Restore video state if an ad was mid-fast-forward
     const video = getVideo();
     if (video && adActive) {
       video.playbackRate = originalRate;
@@ -51,56 +48,43 @@
     }
   }
 
+  // tick() is chrome-API-free — no risk of "context invalidated" here
   function tick() {
-    if (!isContextValid()) {
-      teardown();
-      return;
-    }
+    if (!enabled) return;
 
-    try {
-      chrome.storage.local.get({ enabled: true }, ({ enabled }) => {
-        if (!isContextValid()) { teardown(); return; }
-        if (!enabled) return;
+    const video = getVideo();
+    if (!video) return;
 
-        const video = getVideo();
-        if (!video) return;
+    if (isAdPlaying()) {
+      if (!adActive) {
+        adActive = true;
+        originalRate = video.playbackRate || 1;
+      }
 
-        if (isAdPlaying()) {
-          if (!adActive) {
-            adActive = true;
-            originalRate = video.playbackRate || 1;
-          }
+      tryClickSkip();
 
-          // Always try to click skip (catches button appearing at end of fast-forwarded ad)
-          tryClickSkip();
+      if (video.playbackRate !== FAST_FORWARD_RATE) {
+        video.playbackRate = FAST_FORWARD_RATE;
+        video.muted = true;
+      }
 
-          // Also fast-forward if the skip button isn't clickable yet
-          if (video.playbackRate !== FAST_FORWARD_RATE) {
-            video.playbackRate = FAST_FORWARD_RATE;
-            video.muted = true;
-          }
-
-          // If video stalled at the end, nudge it to trigger skip
-          if (video.duration > 0 && video.currentTime >= video.duration - 0.1) {
-            tryClickSkip();
-          }
-        } else {
-          if (adActive) {
-            adActive = false;
-            video.playbackRate = originalRate;
-            video.muted = false;
-          }
-        }
-      });
-    } catch {
-      teardown();
+      if (video.duration > 0 && video.currentTime >= video.duration - 0.1) {
+        tryClickSkip();
+      }
+    } else {
+      if (adActive) {
+        adActive = false;
+        video.playbackRate = originalRate;
+        video.muted = false;
+      }
     }
   }
 
-  // Poll every 300ms
   const intervalId = setInterval(tick, 300);
 
-  // Also react immediately to DOM changes (e.g. skip button appearing)
   const observer = new MutationObserver(tick);
   observer.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Clean up when the extension is reloaded/removed
+  window.addEventListener('unload', teardown);
 })();
