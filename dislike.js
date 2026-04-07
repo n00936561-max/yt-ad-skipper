@@ -71,13 +71,17 @@
     // Retry until the dislike button appears in the DOM
     let tries = 0;
     const poll = setInterval(async () => {
-      tries++;
-      if (tries > 40) { clearInterval(poll); return; } // 20s timeout
+      try {
+        tries++;
+        if (tries > 40) { clearInterval(poll); return; } // 20s timeout
 
-      const count = await fetchDislikes(id);
-      if (count === null) return; // API not ready yet
+        const count = await fetchDislikes(id);
+        if (count === null) return; // API not ready yet
 
-      if (inject(count)) clearInterval(poll); // success
+        if (inject(count)) clearInterval(poll); // success
+      } catch {
+        clearInterval(poll);
+      }
     }, 500);
   }
 
