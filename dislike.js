@@ -1,84 +1,93 @@
 (function () {
-  let currentVideoId = null;
-  const LABEL_ID = 'ryd-dislike-count';
+  const LABEL_ID = 'ryd-count';
+  let lastVideoId = null;
 
-  function getVideoId() {
-    return new URLSearchParams(window.location.search).get('v');
+  function videoId() {
+    return new URLSearchParams(location.search).get('v');
   }
 
-  function findDislikeButton() {
-    // Try several selectors to survive YouTube DOM changes
-    return (
-      document.querySelector('#segmented-dislike-button button') ||
-      document.querySelector('ytd-segmented-like-dislike-button-renderer #dislike-button button') ||
-      document.querySelector('button[aria-label*="Dislike"]') ||
-      document.querySelector('like-button-view-model ~ like-button-view-model button')
-    );
-  }
-
-  function formatCount(n) {
-    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-    if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  function fmt(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toLocaleString();
   }
 
-  async function fetchDislikes(videoId) {
+  async function fetchDislikes(id) {
     try {
-      const res = await fetch(`https://returnyoutubedislike.com/api/votes?videoId=${videoId}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.dislikes ?? null;
+      const r = await fetch('https://returnyoutubedislike.com/api/votes?videoId=' + id);
+      if (!r.ok) return null;
+      const d = await r.json();
+      return typeof d.dislikes === 'number' ? d.dislikes : null;
     } catch {
       return null;
     }
   }
 
-  function injectCount(count) {
+  // Find the dislike button — try multiple selectors for different YouTube layouts
+  function findDislikeBtn() {
+    // Newer layout: two separate like-button-view-model elements
+    const btns = document.querySelectorAll('like-button-view-model button');
+    if (btns.length >= 2) return btns[1];
+
+    // Segmented layout
+    const seg = document.querySelector('#segmented-dislike-button button, #dislike-button button');
+    if (seg) return seg;
+
+    // Fallback: aria-label
+    return document.querySelector('button[aria-label*="Dislike"], button[aria-label*="dislike"]');
+  }
+
+  function inject(count) {
     document.getElementById(LABEL_ID)?.remove();
 
-    const btn = findDislikeButton();
-    if (!btn) return;
+    const btn = findDislikeBtn();
+    if (!btn) return false;
 
-    const label = document.createElement('span');
-    label.id = LABEL_ID;
-    label.textContent = formatCount(count);
-    label.style.cssText = `
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--yt-spec-text-primary, #fff);
-      margin-left: 6px;
-      pointer-events: none;
-      align-self: center;
-      display: inline-flex;
-      align-items: center;
+    const span = document.createElement('span');
+    span.id = LABEL_ID;
+    span.textContent = fmt(count);
+    span.style.cssText = `
+      font-size:1.4rem;
+      font-weight:500;
+      color:var(--yt-spec-text-primary,#fff);
+      margin-left:8px;
+      line-height:1;
+      align-self:center;
+      pointer-events:none;
     `;
 
-    // Insert after the button inside its parent flex container
-    btn.closest('yt-button-shape, div')?.appendChild(label) ??
-      btn.parentElement?.appendChild(label);
+    // Insert after the button's icon container, inside the same flex row
+    btn.insertAdjacentElement('afterend', span);
+    return true;
   }
 
   async function run() {
-    const videoId = getVideoId();
-    if (!videoId || videoId === currentVideoId) return;
-    currentVideoId = videoId;
+    const id = videoId();
+    if (!id || id === lastVideoId) return;
+    lastVideoId = id;
 
-    // Retry until the dislike button renders (YouTube loads lazily)
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      attempts++;
-      const btn = findDislikeButton();
-      if (btn) {
-        clearInterval(interval);
-        const count = await fetchDislikes(videoId);
-        if (count !== null) injectCount(count);
-      }
-      if (attempts > 30) clearInterval(interval); // give up after ~15s
+    document.getElementById(LABEL_ID)?.remove();
+
+    // Retry until the dislike button appears in the DOM
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      if (tries > 40) { clearInterval(poll); return; } // 20s timeout
+
+      const count = await fetchDislikes(id);
+      if (count === null) return; // API not ready yet
+
+      if (inject(count)) clearInterval(poll); // success
     }, 500);
   }
 
-  // YouTube is a SPA — listen for navigation events
+  // YouTube SPA: fires on every navigation
   window.addEventListener('yt-navigate-finish', run);
-  // Also run on initial page load
-  run();
+
+  // Initial load (not a SPA navigation)
+  if (document.readyState === 'complete') {
+    run();
+  } else {
+    window.addEventListener('load', run);
+  }
 })();

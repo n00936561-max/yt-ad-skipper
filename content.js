@@ -1,16 +1,7 @@
 (function () {
-  const FAST_FORWARD_RATE = 16;
+  const RATE = 16;
   let adActive = false;
-  let originalRate = 1;
-  let enabled = true; // cached — never read chrome.storage inside tick()
-
-  // Load initial state once, then keep in sync via listener
-  try {
-    chrome.storage.local.get({ enabled: true }, (res) => { enabled = res.enabled; });
-    chrome.storage.onChanged.addListener((changes) => {
-      if ('enabled' in changes) enabled = changes.enabled.newValue;
-    });
-  } catch { /* extension context already gone on inject — default enabled */ }
+  let savedRate = 1;
 
   const SKIP_SELECTORS = [
     '.ytp-skip-ad-button',
@@ -19,72 +10,44 @@
     '.ytp-ad-skip-button-slot button',
   ];
 
-  function getVideo() {
-    return document.querySelector('video');
+  function video() { return document.querySelector('video'); }
+
+  function adPlaying() {
+    return document.querySelector('.ad-showing') !== null;
   }
 
-  function isAdPlaying() {
-    return !!(
-      document.querySelector('.ad-showing') ||
-      document.querySelector('.ytp-ad-player-overlay-instream-info')
-    );
-  }
-
-  function tryClickSkip() {
-    for (const sel of SKIP_SELECTORS) {
-      const btn = document.querySelector(sel);
-      if (btn) { btn.click(); return true; }
-    }
-    return false;
-  }
-
-  function teardown() {
-    clearInterval(intervalId);
-    observer.disconnect();
-    const video = getVideo();
-    if (video && adActive) {
-      video.playbackRate = originalRate;
-      video.muted = false;
+  function clickSkip() {
+    for (const s of SKIP_SELECTORS) {
+      const el = document.querySelector(s);
+      if (el) { el.click(); return; }
     }
   }
 
-  // tick() is chrome-API-free — no risk of "context invalidated" here
   function tick() {
-    if (!enabled) return;
+    const v = video();
+    if (!v) return;
 
-    const video = getVideo();
-    if (!video) return;
-
-    if (isAdPlaying()) {
+    if (adPlaying()) {
       if (!adActive) {
         adActive = true;
-        originalRate = video.playbackRate || 1;
+        savedRate = v.playbackRate || 1;
+        v.muted = true;
       }
-
-      tryClickSkip();
-
-      if (video.playbackRate !== FAST_FORWARD_RATE) {
-        video.playbackRate = FAST_FORWARD_RATE;
-        video.muted = true;
-      }
-
-      if (video.duration > 0 && video.currentTime >= video.duration - 0.1) {
-        tryClickSkip();
-      }
-    } else {
-      if (adActive) {
-        adActive = false;
-        video.playbackRate = originalRate;
-        video.muted = false;
-      }
+      v.playbackRate = RATE;
+      clickSkip();
+    } else if (adActive) {
+      adActive = false;
+      v.playbackRate = savedRate;
+      v.muted = false;
     }
   }
 
-  const intervalId = setInterval(tick, 300);
+  setInterval(tick, 300);
 
-  const observer = new MutationObserver(tick);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-
-  // Clean up when the extension is reloaded/removed
-  window.addEventListener('unload', teardown);
+  new MutationObserver(tick).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class'],
+  });
 })();
