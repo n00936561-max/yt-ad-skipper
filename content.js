@@ -32,44 +32,73 @@
     return false;
   }
 
+  function isContextValid() {
+    try {
+      return !!chrome.runtime?.id;
+    } catch {
+      return false;
+    }
+  }
+
+  function teardown() {
+    clearInterval(intervalId);
+    observer.disconnect();
+    // Restore video state if an ad was mid-fast-forward
+    const video = getVideo();
+    if (video && adActive) {
+      video.playbackRate = originalRate;
+      video.muted = false;
+    }
+  }
+
   function tick() {
-    chrome.storage.local.get({ enabled: true }, ({ enabled }) => {
-      if (!enabled) return;
+    if (!isContextValid()) {
+      teardown();
+      return;
+    }
 
-      const video = getVideo();
-      if (!video) return;
+    try {
+      chrome.storage.local.get({ enabled: true }, ({ enabled }) => {
+        if (!isContextValid()) { teardown(); return; }
+        if (!enabled) return;
 
-      if (isAdPlaying()) {
-        if (!adActive) {
-          adActive = true;
-          originalRate = video.playbackRate || 1;
-        }
+        const video = getVideo();
+        if (!video) return;
 
-        // Always try to click skip (catches button appearing at end of fast-forwarded ad)
-        tryClickSkip();
+        if (isAdPlaying()) {
+          if (!adActive) {
+            adActive = true;
+            originalRate = video.playbackRate || 1;
+          }
 
-        // Also fast-forward if the skip button isn't clickable yet
-        if (video.playbackRate !== FAST_FORWARD_RATE) {
-          video.playbackRate = FAST_FORWARD_RATE;
-          video.muted = true;
-        }
-
-        // If video stalled at the end, nudge it to trigger skip
-        if (video.duration > 0 && video.currentTime >= video.duration - 0.1) {
+          // Always try to click skip (catches button appearing at end of fast-forwarded ad)
           tryClickSkip();
+
+          // Also fast-forward if the skip button isn't clickable yet
+          if (video.playbackRate !== FAST_FORWARD_RATE) {
+            video.playbackRate = FAST_FORWARD_RATE;
+            video.muted = true;
+          }
+
+          // If video stalled at the end, nudge it to trigger skip
+          if (video.duration > 0 && video.currentTime >= video.duration - 0.1) {
+            tryClickSkip();
+          }
+        } else {
+          if (adActive) {
+            adActive = false;
+            video.playbackRate = originalRate;
+            video.muted = false;
+          }
         }
-      } else {
-        if (adActive) {
-          adActive = false;
-          video.playbackRate = originalRate;
-          video.muted = false;
-        }
-      }
-    });
+      });
+    } catch {
+      teardown();
+    }
   }
 
   // Poll every 300ms
-  setInterval(tick, 300);
+  const intervalId = setInterval(tick, 300);
 
   // Also react immediately to DOM changes (e.g. skip button appearing)
   const observer = new MutationObserver(tick);
