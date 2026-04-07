@@ -1,6 +1,16 @@
 (function () {
   const LABEL_ID = 'ryd-count';
   let lastVideoId = null;
+  let pollTimer = null;
+
+  // Same port teardown so reloads don't leave dangling timers
+  try {
+    const port = chrome.runtime.connect({ name: 'dislike' });
+    port.onDisconnect.addListener(() => {
+      clearInterval(pollTimer);
+      document.getElementById(LABEL_ID)?.remove();
+    });
+  } catch { return; }
 
   function videoId() {
     return new URLSearchParams(location.search).get('v');
@@ -18,46 +28,43 @@
       if (!r.ok) return null;
       const d = await r.json();
       return typeof d.dislikes === 'number' ? d.dislikes : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
-  // Find the dislike button — try multiple selectors for different YouTube layouts
-  function findDislikeBtn() {
-    // Newer layout: two separate like-button-view-model elements
-    const btns = document.querySelectorAll('like-button-view-model button');
-    if (btns.length >= 2) return btns[1];
-
-    // Segmented layout
-    const seg = document.querySelector('#segmented-dislike-button button, #dislike-button button');
-    if (seg) return seg;
-
-    // Fallback: aria-label
-    return document.querySelector('button[aria-label*="Dislike"], button[aria-label*="dislike"]');
+  function findDislikeArea() {
+    // Try every known YouTube layout variant
+    return (
+      // 2024+ layout: two like-button-view-model, second is dislike
+      document.querySelector('like-button-view-model:last-of-type') ||
+      document.querySelector('like-button-view-model + like-button-view-model') ||
+      // Segmented button layout
+      document.querySelector('#segmented-dislike-button') ||
+      document.querySelector('#dislike-button') ||
+      // Aria fallback
+      document.querySelector('button[aria-label*="islike"]')?.closest('yt-button-shape, div')
+    );
   }
 
   function inject(count) {
     document.getElementById(LABEL_ID)?.remove();
 
-    const btn = findDislikeBtn();
-    if (!btn) return false;
+    const area = findDislikeArea();
+    if (!area) return false;
 
     const span = document.createElement('span');
     span.id = LABEL_ID;
     span.textContent = fmt(count);
-    span.style.cssText = `
-      font-size:1.4rem;
-      font-weight:500;
-      color:var(--yt-spec-text-primary,#fff);
-      margin-left:8px;
-      line-height:1;
-      align-self:center;
-      pointer-events:none;
-    `;
+    span.style.cssText = [
+      'font-size:1.4rem',
+      'font-weight:500',
+      'color:var(--yt-spec-text-primary,#fff)',
+      'margin-left:6px',
+      'align-self:center',
+      'pointer-events:none',
+      'display:inline-block',
+    ].join(';');
 
-    // Insert after the button's icon container, inside the same flex row
-    btn.insertAdjacentElement('afterend', span);
+    area.appendChild(span);
     return true;
   }
 
@@ -66,32 +73,21 @@
     if (!id || id === lastVideoId) return;
     lastVideoId = id;
 
+    clearInterval(pollTimer);
     document.getElementById(LABEL_ID)?.remove();
 
-    // Retry until the dislike button appears in the DOM
+    // Fetch once, then retry injection until the button is in the DOM
+    const count = await fetchDislikes(id);
+    if (count === null) return;
+
     let tries = 0;
-    const poll = setInterval(async () => {
-      try {
-        tries++;
-        if (tries > 40) { clearInterval(poll); return; } // 20s timeout
-
-        const count = await fetchDislikes(id);
-        if (count === null) return; // API not ready yet
-
-        if (inject(count)) clearInterval(poll); // success
-      } catch {
-        clearInterval(poll);
-      }
+    pollTimer = setInterval(() => {
+      tries++;
+      if (tries > 40) { clearInterval(pollTimer); return; }
+      if (inject(count)) clearInterval(pollTimer);
     }, 500);
   }
 
-  // YouTube SPA: fires on every navigation
   window.addEventListener('yt-navigate-finish', run);
-
-  // Initial load (not a SPA navigation)
-  if (document.readyState === 'complete') {
-    run();
-  } else {
-    window.addEventListener('load', run);
-  }
+  window.addEventListener('load', run);
 })();

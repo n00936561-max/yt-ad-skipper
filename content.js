@@ -2,7 +2,16 @@
   const RATE = 16;
   let adActive = false;
   let savedRate = 1;
-  let dead = false;
+  let stopped = false;
+
+  // Connect to background — when the extension reloads, the port disconnects,
+  // which lets us cleanly shut down before Chrome can throw "context invalidated"
+  try {
+    const port = chrome.runtime.connect({ name: 'content' });
+    port.onDisconnect.addListener(stop);
+  } catch {
+    return; // extension already gone, don't run at all
+  }
 
   const SKIP_SELECTORS = [
     '.ytp-skip-ad-button',
@@ -11,52 +20,38 @@
     '.ytp-ad-skip-button-slot button',
   ];
 
-  function video() { return document.querySelector('video'); }
-  function adPlaying() { return document.querySelector('.ad-showing') !== null; }
-
-  function clickSkip() {
-    for (const s of SKIP_SELECTORS) {
-      const el = document.querySelector(s);
-      if (el) { el.click(); return; }
-    }
-  }
-
   function stop() {
-    dead = true;
+    stopped = true;
     clearInterval(timer);
     obs.disconnect();
+    // Restore video if mid-ad
+    const v = document.querySelector('video');
+    if (v && adActive) { v.playbackRate = savedRate; v.muted = false; }
   }
 
   function tick() {
-    if (dead) return;
-    try {
-      const v = video();
-      if (!v) return;
-
-      if (adPlaying()) {
-        if (!adActive) {
-          adActive = true;
-          savedRate = v.playbackRate || 1;
-          v.muted = true;
-        }
-        v.playbackRate = RATE;
-        clickSkip();
-      } else if (adActive) {
-        adActive = false;
-        v.playbackRate = savedRate;
-        v.muted = false;
+    if (stopped) return;
+    const v = document.querySelector('video');
+    if (!v) return;
+    const ad = document.querySelector('.ad-showing') !== null;
+    if (ad) {
+      if (!adActive) { adActive = true; savedRate = v.playbackRate || 1; v.muted = true; }
+      v.playbackRate = RATE;
+      for (const s of SKIP_SELECTORS) {
+        const el = document.querySelector(s);
+        if (el) { el.click(); break; }
       }
-    } catch {
-      stop();
+    } else if (adActive) {
+      adActive = false;
+      v.playbackRate = savedRate;
+      v.muted = false;
     }
   }
 
   const timer = setInterval(tick, 300);
   const obs = new MutationObserver(tick);
   obs.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class'],
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['class'],
   });
 })();
