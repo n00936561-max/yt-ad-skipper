@@ -45,12 +45,18 @@
           originalRate = video.playbackRate || 1;
         }
 
-        // Try to click skip first; if no skip button, fast-forward
-        if (!tryClickSkip()) {
-          if (video.playbackRate !== FAST_FORWARD_RATE) {
-            video.playbackRate = FAST_FORWARD_RATE;
-            video.muted = true;
-          }
+        // Always try to click skip (catches button appearing at end of fast-forwarded ad)
+        tryClickSkip();
+
+        // Also fast-forward if the skip button isn't clickable yet
+        if (video.playbackRate !== FAST_FORWARD_RATE) {
+          video.playbackRate = FAST_FORWARD_RATE;
+          video.muted = true;
+        }
+
+        // If video stalled at the end, nudge it to trigger skip
+        if (video.duration > 0 && video.currentTime >= video.duration - 0.1) {
+          tryClickSkip();
         }
       } else {
         if (adActive) {
